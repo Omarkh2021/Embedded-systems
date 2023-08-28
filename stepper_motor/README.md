@@ -1,0 +1,1 @@
+Using Keypad, LCD and Servo Motor, make a system that controls the rotation angle of the stepper motor. The user writes the desired angle on the LCD using the keypad, then the steppermotor shall rotate to the desired angle.
