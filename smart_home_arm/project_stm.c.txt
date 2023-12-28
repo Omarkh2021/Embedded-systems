@@ -1,0 +1,204 @@
+#include <DHT_U.h>
+#include <dht.h>
+// RemoteXY select connection mode and include library 
+#define REMOTEXY_MODE__HARDSERIAL
+
+#include <RemoteXY.h>
+#include <DHT.h>
+    //initilize object dht for class DHT with DHT pin with STM32 and DHT type as DHT11
+
+// RemoteXY connection settings 
+#define REMOTEXY_SERIAL Serial2
+#define REMOTEXY_SERIAL_SPEED 9600
+
+#define DHTPIN PA5 
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE); 
+
+int t;//t=Temp
+int h;//h=Humidity
+int greenpin ;
+int redpin ;
+int buzzerpin ;
+// RemoteXY configurate  
+#pragma pack(push, 1)
+uint8_t RemoteXY_CONF[] =   // 139 bytes
+  { 255,3,0,22,0,132,0,16,31,1,2,0,24,7,22,11,12,26,31,31,
+  79,78,0,79,70,70,0,67,4,7,60,20,5,2,26,11,129,0,8,51,
+  18,6,17,84,101,109,112,0,129,0,2,33,26,6,17,108,111,99,107,32,
+  100,111,111,114,0,129,0,3,11,18,6,17,76,97,109,112,0,2,0,10,
+  76,22,11,12,26,31,31,79,78,0,79,70,70,0,129,0,12,68,18,6,
+  17,65,47,67,0,1,8,33,29,12,12,12,27,0,67,4,33,60,20,5,
+  2,26,11,129,0,33,50,18,6,17,104,117,109,105,100,105,116,121,0 };
+  
+// this structure defines all the variables and events of your control interface 
+struct {
+
+    // input variables
+  uint8_t lamp; // =1 if switch ON and =0 if OFF 
+  uint8_t air_condition; // =1 if switch ON and =0 if OFF 
+  uint8_t lock_door; // =1 if button pressed, else =0 
+
+    // output variables
+  char text_Temp[11];  // string UTF8 end zero 
+  char text_Humidity[11];  // string UTF8 end zero 
+
+    // other variable
+  uint8_t connect_flag;  // =1 if wire connected, else =0 
+
+} RemoteXY;
+#pragma pack(pop)
+
+//////switchs
+#define PIN_LAMP PA0
+#define PIN_AIR_CONDITION PA4
+#define PIN_LOCK_DOOR PA1
+///////DHT
+
+
+//////////RFID
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define SS_PIN PB11
+#define RST_PIN PB1
+ 
+MFRC522 rfid(SS_PIN, RST_PIN); // Instance of the class
+
+MFRC522::MIFARE_Key key; 
+
+// Init array that will store new NUID 
+byte nuidPICC[4];
+#define greenpin PA1
+
+#define redpin PA9
+#define buzzerpin PA10
+
+
+void setup() 
+{
+  ////////DHT
+   Serial.begin(9600);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the
+  pinMode(DHTPIN, OUTPUT);
+  dht.begin();  
+  /////
+  RemoteXY_Init (); 
+  
+  pinMode (PIN_LAMP, OUTPUT);
+  pinMode (PIN_AIR_CONDITION, OUTPUT);
+  pinMode (PIN_LOCK_DOOR, OUTPUT);
+  ////ID locker
+   pinMode(greenpin, OUTPUT);
+  pinMode(redpin, OUTPUT);
+  pinMode(buzzerpin, OUTPUT);
+  Serial.begin(9600);
+  SPI.begin(); // Init SPI bus
+  rfid.PCD_Init(); // Init MFRC522 
+
+  for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
+  }
+
+  Serial.println(F("This code scan the MIFARE Classsic NUID."));
+  Serial.print(F("Using the following key:"));
+  printHex(key.keyByte, MFRC522::MF_KEY_SIZE);
+}
+  // TODO you setup code
+  
+void loop() 
+{ 
+  RemoteXY_Handler ();
+  ////switchs
+  digitalWrite(PIN_LAMP, (RemoteXY.lamp==0)?LOW:HIGH);
+  digitalWrite(PIN_AIR_CONDITION, (RemoteXY.air_condition==0)?LOW:HIGH);
+  digitalWrite(PIN_LOCK_DOOR, (RemoteXY.lock_door==0)?LOW:HIGH);
+///////////DHT
+
+  h = dht.readHumidity();       //Gets Humidity value
+  t = dht.readTemperature();    //Gets Temperature value
+
+   dtostrf(t, 0, 1, RemoteXY.text_Temp);
+   dtostrf(h, 0, 1, RemoteXY.text_Humidity);
+   delay(1500);
+  ///////ID LOcker
+
+  // Reset the loop if no new card present on the sensor/reader. This saves the entire process when idle.
+  if ( ! rfid.PICC_IsNewCardPresent())
+    return;
+
+  // Verify if the NUID has been readed
+  if ( ! rfid.PICC_ReadCardSerial())
+    return;
+
+  Serial.print(F("PICC type: "));
+  MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
+  Serial.println(rfid.PICC_GetTypeName(piccType));
+
+  // Check is the PICC of Classic MIFARE type
+  if (piccType != MFRC522::PICC_TYPE_MIFARE_MINI &&  
+    piccType != MFRC522::PICC_TYPE_MIFARE_1K &&
+    piccType != MFRC522::PICC_TYPE_MIFARE_4K) {
+    Serial.println(F("Your tag is not of type MIFARE Classic."));
+    return;
+  }
+
+  if (rfid.uid.uidByte[0] != nuidPICC[0] || 
+    rfid.uid.uidByte[1] != nuidPICC[1] || 
+    rfid.uid.uidByte[2] != nuidPICC[2] || 
+    rfid.uid.uidByte[3] != nuidPICC[3] ) {
+    Serial.println(F("A new card has been detected."));
+
+    // Store NUID into nuidPICC array
+    for (byte i = 0; i < 4; i++) {
+      nuidPICC[i] = rfid.uid.uidByte[i];
+    }
+   
+    Serial.println(F("The NUID tag is:"));
+    Serial.print(F("In hex: "));
+    printHex(rfid.uid.uidByte, rfid.uid.size);
+    Serial.println();
+    Serial.print(F("In dec: "));
+    printDec(rfid.uid.uidByte, rfid.uid.size);
+    Serial.println();
+  }
+  else Serial.println(F("Card read previously."));
+  if(nuidPICC[0] == 0x73 && nuidPICC[1]==0xBE && nuidPICC[2]==0xFC && nuidPICC[3]==0x00){
+      digitalWrite(greenpin , HIGH);
+       delay(4000);
+        digitalWrite(greenpin , LOW);
+    }
+    else{
+       digitalWrite(redpin,HIGH);
+        digitalWrite(buzzerpin, HIGH);
+        delay(4000);
+         digitalWrite(redpin,LOW);
+          digitalWrite(buzzerpin,LOW);
+    }
+  // Halt PICC
+  rfid.PICC_HaltA();
+
+  // Stop encryption on PCD
+  rfid.PCD_StopCrypto1();
+}
+  // TODO you loop code
+  // use the RemoteXY structure for data transfer
+  // do not call delay(), use instead RemoteXY_delay() 
+
+
+void printHex(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+}
+
+/**
+ * Helper routine to dump a byte array as dec values to Serial.
+ */
+void printDec(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], DEC);
+  }
+}

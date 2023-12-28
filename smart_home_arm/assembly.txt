@@ -1,0 +1,263 @@
+; Include libraries
+#include <DHT.h>
+#include <RemoteXY.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+; Define constants
+#define DHTPIN PA5
+#define DHTTYPE DHT11
+#define REMOTEXY_SERIAL Serial2
+#define REMOTEXY_SERIAL_SPEED 9600
+#define PIN_LAMP PA0
+#define PIN_AIR_CONDITION PA4
+#define PIN_LOCK_DOOR PA1
+#define SS_PIN PB11
+#define RST_PIN PB1
+#define greenpin PA1
+#define redpin PA9
+#define buzzerpin PA10
+
+; Initialize DHT object
+DHT dht(DHTPIN, DHTTYPE);
+
+; Define variables
+int t; ; Temperature
+int h; ; Humidity
+int greenpin;
+int redpin;
+int buzzerpin;
+
+; RemoteXY configuration
+#pragma pack(push, 1)
+uint8_t RemoteXY_CONF[] =   ; 139 bytes
+  { 255,3,0,22,0,132,0,16,31,1,2,0,24,7,22,11,12,26,31,31,
+  79,78,0,79,70,70,0,67,4,7,60,20,5,2,26,11,129,0,8,51,
+  18,6,17,84,101,109,112,0,129,0,2,33,26,6,17,108,111,99,107,32,
+  100,111,111,114,0,129,0,3,11,18,6,17,76,97,109,112,0,2,0,10,
+  76,22,11,12,26,31,31,79,78,0,79,70,70,0,129,0,12,68,18,6,
+  17,65,47,67,0,1,8,33,29,12,12,12,27,0,67,4,33,60,20,5,
+  2,26,11,129,0,33,50,18,6,17,104,117,109,105,100,105,116,121,0 };
+  
+; Define control interface structure
+struct {
+  ; Input variables
+  uint8_t lamp; ; =1 if switch ON and =0 if OFF 
+  uint8_t air_condition; ; =1 if switch ON and =0 if OFF 
+  uint8_t lock_door; ; =1 if button pressed, else =0 
+
+  ; Output variables
+  char text_Temp[11];  ; string UTF8 end zero 
+  char text_Humidity[11];  ; string UTF8 end zero 
+
+  ; Other variable
+  uint8_t connect_flag;  ; =1 if wire connected, else =0 
+
+} RemoteXY;
+#pragma pack(pop)
+
+; Initialize MFRC522 object
+MFRC522 rfid(SS_PIN, RST_PIN); ; Instance of the class
+MFRC522::MIFARE_Key key; 
+
+; Init array that will store new NUID 
+byte nuidPICC[4];
+
+; Main program
+void setup() {
+  ; Initialize DHT sensor
+  dht.begin();
+  
+  ; Initialize RemoteXY
+  RemoteXY_Init();
+  
+  ; Initialize SPI communication
+  SPI.begin();
+  
+  ; Initialize MFRC522
+  rfid.PCD_Init();
+}
+
+void loop() {
+  ; RemoteXY control
+  RemoteXY_Handler();
+  
+  ; Read DHT sensor
+  t = dht.readTemperature();
+  h = dht.readHumidity();
+  
+  ; Update RemoteXY variables
+  RemoteXY.text_Temp = t;
+  RemoteXY.text_Humidity = h;
+  
+  ; Check RFID card
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    ; Read card UID
+    for (byte i = 0; i < 4; i++) {
+      nuidPICC[i] = rfid.uid.uidByte[i];
+    }
+  }
+}
+; Assembly code for Arduino sketch
+
+; Define constants
+DHTPIN PA5
+PIN_LAMP PA0
+PIN_AIR_CONDITION PA4
+PIN_LOCK_DOOR PA1
+greenpin PA1
+redpin PA9
+buzzerpin PA10
+
+; Initialize setup
+setup:
+    call Serial_begin
+    call display_begin
+    mov r16, DHTPIN
+    out DDRB, r16  ; Set DHTPIN as output
+    call dht_begin
+    call RemoteXY_Init
+    mov r16, PIN_LAMP
+    out DDRB, r16  ; Set PIN_LAMP as output
+    mov r16, PIN_AIR_CONDITION
+    out DDRB, r16  ; Set PIN_AIR_CONDITION as output
+    mov r16, PIN_LOCK_DOOR
+    out DDRB, r16  ; Set PIN_LOCK_DOOR as output
+    mov r16, greenpin
+    out DDRB, r16  ; Set greenpin as output
+    mov r16, redpin
+    out DDRB, r16  ; Set redpin as output
+    mov r16, buzzerpin
+    out DDRB, r16  ; Set buzzerpin as output
+    call Serial_begin
+    call SPI_begin
+    call PCD_Init
+    ldi r16, 0xFF
+    ldi r17, 0
+init_loop:
+    st Z+, r16  ; Initialize key.keyByte with 0xFF
+    inc r17
+    cpi r17, 6
+    brne init_loop
+    call print_key_info
+    ret
+
+; Main loop
+loop:
+    call RemoteXY_Handler
+    lds r16, RemoteXY_lamp
+    cpi r16, 0
+    breq lamp_off
+    rjmp lamp_on
+lamp_off:
+    ldi r16, 0
+    out PORTB, r16  ; Turn off PIN_LAMP
+    rjmp air_condition_check
+lamp_on:
+    ldi r16, 1
+    out PORTB, r16  ; Turn on PIN_LAMP
+air_condition_check:
+    lds r16, RemoteXY_air_condition
+    cpi r16, 0
+    breq air_condition_off
+    rjmp air_condition_on
+air_condition_off:
+    ldi r16, 0
+    out PORTB, r16  ; Turn off PIN_AIR_CONDITION
+    rjmp lock_door_check
+air_condition_on:
+    ldi r16, 1
+    out PORTB, r16  ; Turn on PIN_AIR_CONDITION
+lock_door_check:
+    lds r16, RemoteXY_lock_door
+    cpi r16, 0
+    breq lock_door_off
+    rjmp lock_door_on
+lock_door_off:
+    ldi r16, 0
+    out PORTB, r16  ; Turn off PIN_LOCK_DOOR
+    rjmp read_dht
+lock_door_on:
+    ldi r16, 1
+    out PORTB, r16  ; Turn on PIN_LOCK_DOOR
+read_dht:
+    call dht_readHumidity
+    call dht_readTemperature
+    call dtostrf_t
+    call dtostrf_h
+    call RemoteXY_delay
+    rjmp id_locker
+
+; ID Locker
+id_locker:
+    call PICC_IsNewCardPresent
+    breq id_locker_end
+    call PICC_ReadCardSerial
+    breq id_locker_end
+    call print_PICC_type
+    call check_PICC_type
+    call check_nuid
+    rjmp id_locker_end
+id_locker_end:
+    call PICC_HaltA
+    call PCD_StopCrypto1
+    ret
+
+; Helper functions
+Serial_begin:
+    ; Code for Serial.begin(9600)
+    ret
+display_begin:
+    ; Code for display.begin(SSD1306_SWITCHCAPVCC, 0x3C)
+    ret
+dht_begin:
+    ; Code for dht.begin()
+    ret
+RemoteXY_Init:
+    ; Code for RemoteXY_Init()
+    ret
+SPI_begin:
+    ; Code for SPI.begin()
+    ret
+PCD_Init:
+    ; Code for rfid.PCD_Init()
+    ret
+print_key_info:
+    ; Code for printing key information
+    ret
+dht_readHumidity:
+    ; Code for dht.readHumidity()
+    ret
+dht_readTemperature:
+    ; Code for dht.readTemperature()
+    ret
+dtostrf_t:
+    ; Code for converting temperature to string
+    ret
+dtostrf_h:
+    ; Code for converting humidity to string
+    ret
+RemoteXY_delay:
+    ; Code for RemoteXY_delay()
+    ret
+PICC_IsNewCardPresent:
+    ; Code for rfid.PICC_IsNewCardPresent()
+    ret
+PICC_ReadCardSerial:
+    ; Code for rfid.PICC_ReadCardSerial()
+    ret
+print_PICC_type:
+    ; Code for printing PICC type
+    ret
+check_PICC_type:
+    ; Code for checking PICC type
+    ret
+check_nuid:
+    ; Code for checking nuid
+    ret
+PICC_HaltA:
+    ; Code for rfid.PICC_HaltA()
+    ret
+PCD_StopCrypto1:
+    ; Code for rfid.PCD_StopCrypto1()
+    ret
